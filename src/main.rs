@@ -322,6 +322,28 @@ impl<'ctx> CodeGen<'ctx> {
         js_value
     }
 
+    fn get_js_value_type(&self, ptr: PointerValue<'ctx>) -> Type {
+        let type_ptr = self.builder.build_struct_gep(self.js_value_type, ptr, 0, "type_ptr").unwrap();
+        let type_val = self.builder.build_load(self.context.i8_type(), type_ptr, "type").unwrap().into_int_value();
+        let num_type = type_val.get_type().const_int(Type::Number as u64, false);
+        let is_num = self.builder.build_int_compare(IntPredicate::EQ, type_val, num_type, "is_num").unwrap();
+        let current_function = self.get_current_function();
+        let then_block = self.context.append_basic_block(current_function, "then");
+        let else_block = self.context.append_basic_block(current_function, "else");
+        let merge_block = self.context.append_basic_block(current_function, "merge");
+        let result = self.context.i8_type().const_int(0, false);
+
+        self.builder.build_conditional_branch(is_num, then_block, else_block).unwrap();
+
+        self.builder.position_at_end(then_block);
+        self.builder.build_unconditional_branch(merge_block).unwrap();
+
+        self.builder.position_at_end(else_block);
+        self.builder.build_unconditional_branch(merge_block).unwrap();
+
+        self.builder.position_at_end(merge_block);
+        Type::Number
+    }
 
     fn generate_expression(&mut self, expression: &Expression) -> Option<PointerValue<'ctx>> {
         match expression {
@@ -334,101 +356,36 @@ impl<'ctx> CodeGen<'ctx> {
                     None => panic!("Variable {} not found", name),
                 }
             }
-            Expression::Binary(operator, left, right) => {
-                let js_value_type = self.js_value_type;
-                let left_value = self.generate_expression(left).unwrap();
-                let right_value = self.generate_expression(right).unwrap();
+            Expression::Binary(op, left, right) => {
+                let left_val = self.generate_expression(left)?;
+                let right_val = self.generate_expression(right)?;
 
-                let left_type_ptr = self.builder.build_struct_gep(js_value_type, left_value, 0, "left_type_ptr").unwrap();
-                let right_type_ptr = self.builder.build_struct_gep(js_value_type, right_value, 0, "right_type_ptr").unwrap();
+                let left_type = self.get_js_value_type(left_val);
+                let right_type = self.get_js_value_type(right_val);
 
-                let i8_type = self.context.i8_type();
-
-                let left_type = self.builder.build_load(i8_type, left_type_ptr, "left_type").unwrap();
-                let right_type = self.builder.build_load(i8_type, right_type_ptr, "right_type").unwrap();
-
-                match operator {
-                    BinaryOperator::Add => {
-                        let is_left_number = self.builder.build_int_compare(IntPredicate::EQ, left_type.into_int_value(), i8_type.const_int(Type::Number as u64, false).into(), "is_left_number").unwrap();
-                        let is_right_number = self.builder.build_int_compare(IntPredicate::EQ, right_type.into_int_value(), i8_type.const_int(Type::Number as u64, false).into(), "is_right_number").unwrap();
-
-                        let both_numbers = self.builder.build_and(is_left_number, is_right_number, "both_numbers").unwrap();
-
-                        let current_function = self.get_current_function();
-
-                        let then_block = self.context.append_basic_block(current_function, "then");
-                        let else_block = self.context.append_basic_block(current_function, "else");
-                        let merge_block = self.context.append_basic_block(current_function, "merge");
-
-                        self.builder.build_conditional_branch(both_numbers, then_block, else_block).unwrap();
-                        self.builder.position_at_end(then_block);
-
-                        let left_value_ptr = self.builder.build_struct_gep(js_value_type, left_value, 1, "left_value_ptr").unwrap();
-                        let right_value_ptr = self.builder.build_struct_gep(js_value_type, right_value, 1, "right_value_ptr").unwrap();
-
-                        let left_value = self.builder.build_load(self.context.f64_type(), left_value_ptr, "left_value").unwrap();
-                        let right_value = self.builder.build_load(self.context.f64_type(), right_value_ptr, "right_value").unwrap();
-
-                        let result = self.builder.build_float_add(left_value.into_float_value(), right_value.into_float_value(), "result").unwrap();
-
-                        let result_js_value = self.create_entry_block_alloca(js_value_type, "result_js_value");
-                        let result_type_ptr = self.builder.build_struct_gep(js_value_type, result_js_value, 0, "result_type_ptr").unwrap();
-                        let result_value_ptr = self.builder.build_struct_gep(js_value_type, result_js_value, 1, "result_value_ptr").unwrap();
-
-                        self.builder.build_store(result_type_ptr, i8_type.const_int(Type::Number as u64, false)).unwrap();
-                        self.builder.build_store(result_value_ptr, result).unwrap();
-
-                        self.builder.build_unconditional_branch(merge_block).unwrap();
-
-                        self.builder.position_at_end(else_block);
-                        self.builder.build_unreachable().unwrap();
-
-                        self.builder.position_at_end(merge_block);
-
-                        Some(result_js_value)
-                    }
-                    BinaryOperator::LessThan => {
-                        let is_left_number = self.builder.build_int_compare(IntPredicate::EQ, left_type.into_int_value(), i8_type.const_int(Type::Number as u64, false).into(), "is_left_number").unwrap();
-                        let is_right_number = self.builder.build_int_compare(IntPredicate::EQ, right_type.into_int_value(), i8_type.const_int(Type::Number as u64, false).into(), "is_right_number").unwrap();
-
-                        let both_numbers = self.builder.build_and(is_left_number, is_right_number, "both_numbers").unwrap();
-
-                        let current_function = self.get_current_function();
-
-                        let then_block = self.context.append_basic_block(current_function, "then");
-                        let else_block = self.context.append_basic_block(current_function, "else");
-                        let merge_block = self.context.append_basic_block(current_function, "merge");
-
-                        self.builder.build_conditional_branch(both_numbers, then_block, else_block).unwrap();
-                        self.builder.position_at_end(then_block);
-
-                        let left_value_ptr = self.builder.build_struct_gep(js_value_type, left_value, 1, "left_value_ptr").unwrap();
-                        let right_value_ptr = self.builder.build_struct_gep(js_value_type, right_value, 1, "right_value_ptr").unwrap();
-
-                        let left_value = self.builder.build_load(self.context.f64_type(), left_value_ptr, "left_value").unwrap();
-                        let right_value = self.builder.build_load(self.context.f64_type(), right_value_ptr, "right_value").unwrap();
-
-                        let result = self.builder.build_float_compare(FloatPredicate::ULT, left_value.into_float_value(), right_value.into_float_value(), "result").unwrap();
-
-                        let result_js_value = self.create_entry_block_alloca(js_value_type, "result_js_value");
-                        let result_type_ptr = self.builder.build_struct_gep(js_value_type, result_js_value, 0, "result_type_ptr").unwrap();
-                        let result_value_ptr = self.builder.build_struct_gep(js_value_type, result_js_value, 2, "result_value_ptr").unwrap();
-
-                        self.builder.build_store(result_type_ptr, i8_type.const_int(Type::Boolean as u64, false)).unwrap();
-                        self.builder.build_store(result_value_ptr, result).unwrap();
-
-                        self.builder.build_unconditional_branch(merge_block).unwrap();
-
-                        self.builder.position_at_end(else_block);
-                        self.builder.build_unreachable().unwrap();
-
-                        self.builder.position_at_end(merge_block);
-
-                        Some(result_js_value)
+                match (left_type, right_type) {
+                    (Type::Number, Type::Number) => {
+                        let l = self.load_number(left_val);
+                        let r = self.load_number(right_val);
+                        let result = match op {
+                            BinaryOperator::Add => self.builder.build_float_add(l, r, "add").unwrap(),
+                            BinaryOperator::LessThan => {
+                                let cmp = self.builder.build_float_compare(FloatPredicate::ULT, l, r, "cmp").unwrap();
+                                // self.builder.build_zext(cmp, self.context.i8_type(), "bool_ext").unwrap().into_float_value()
+                                self.builder.build_unsigned_int_to_float(cmp, self.context.f64_type(), "bool_ext").unwrap()
+                            }
+                        };
+                        let result_val = self.create_entry_block_alloca(self.js_value_type, "result");
+                        let type_ptr = self.builder.build_struct_gep(self.js_value_type, result_val, 0, "type_ptr").unwrap();
+                        self.builder.build_store(type_ptr, self.context.i8_type().const_int(Type::Number as u64, false)).unwrap();
+                        let value_ptr = self.builder.build_struct_gep(self.js_value_type, result_val, 1, "value_ptr").unwrap();
+                        self.builder.build_store(value_ptr, result).unwrap();
+                        Some(result_val)
                     }
                     _ => unimplemented!(),
                 }
             }
+
             Expression::Call(name, args) => {
                 if name == "println" {
                     Some(self.generate_println(args))
@@ -461,11 +418,15 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
+    fn load_number(&self, ptr: PointerValue<'ctx>) -> inkwell::values::FloatValue<'ctx> {
+        let value_ptr = self.builder.build_struct_gep(self.js_value_type, ptr, 1, "num_ptr").unwrap();
+        self.builder.build_load(self.context.f64_type(), value_ptr, "num").unwrap().into_float_value()
+    }
+
     fn generate_statement(&mut self, statement: &Statement) {
         match statement {
-            Statement::While(condition, program) => {
+            Statement::While(cond, body) => {
                 let current_function = self.get_current_function();
-
                 let cond_block = self.context.append_basic_block(current_function, "while_cond");
                 let body_block = self.context.append_basic_block(current_function, "while_body");
                 let exit_block = self.context.append_basic_block(current_function, "while_exit");
@@ -473,29 +434,18 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_unconditional_branch(cond_block).unwrap();
                 self.builder.position_at_end(cond_block);
 
-                let cond_value_ptr = self.generate_expression(condition).unwrap();
-                let js_value_type = self.js_value_type;
+                let cond_val = self.generate_expression(cond).unwrap();
+                let cond_num = self.load_number(cond_val);
+                let zero = self.context.f64_type().const_float(0.0);
+                let cond = self.builder.build_float_compare(FloatPredicate::ONE, cond_num, zero, "loop_cond").unwrap();
 
-                let cond_bool_ptr = self.builder
-                    .build_struct_gep(js_value_type, cond_value_ptr, 2, "while_cond_bool_ptr").unwrap();
-                let cond_bool = self.builder
-                    .build_load(self.context.bool_type(), cond_bool_ptr, "while_cond_bool").unwrap();
-
-                self.builder.build_conditional_branch(
-                    cond_bool.into_int_value(),
-                    body_block,
-                    exit_block,
-                ).unwrap();
+                self.builder.build_conditional_branch(cond, body_block, exit_block).unwrap();
 
                 self.builder.position_at_end(body_block);
-
-                for stmt in program {
-                    self.generate_statement(stmt);
+                for s in body {
+                    self.generate_statement(s);
                 }
-
-                if self.builder.get_insert_block().unwrap().get_terminator().is_none() {
-                    self.builder.build_unconditional_branch(cond_block).unwrap();
-                }
+                self.builder.build_unconditional_branch(cond_block).unwrap();
 
                 self.builder.position_at_end(exit_block);
             }
@@ -589,46 +539,7 @@ impl<'ctx> CodeGen<'ctx> {
             self.builder.build_return(Some(&zero)).unwrap();
         }
 
-        self.module.print_to_stderr();
-
-
-
-        Target::initialize_all(&InitializationConfig::default());
-
-        let target_triple = TargetMachine::get_default_triple();
-        let target = Target::from_triple(&target_triple).unwrap();
-        let target_machine = target
-            .create_target_machine(
-                &target_triple,
-                "generic",
-                "",
-                OptimizationLevel::Aggressive,
-                RelocMode::PIC,
-                CodeModel::Default,
-            ).unwrap();
-
-        let passes: &[&str] = &[
-            "instcombine",
-            "reassociate",
-            "gvn",
-            "simplifycfg",
-            "mem2reg",
-        ];
-
-        let pass_options = PassBuilderOptions::create();
-        pass_options.set_verify_each(true);
-        pass_options.set_debug_logging(true);
-
-        self
-            .module
-            .run_passes(
-                passes.join(",").as_str(),
-                &target_machine,
-                pass_options,
-            )
-            .unwrap();
-
-        target_machine.write_to_file(&self.module, FileType::Object, Path::new("./output.o")).unwrap();
+        self.module.print_to_file(Path::new("output.ll")).unwrap();
     }
 }
 

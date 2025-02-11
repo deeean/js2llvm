@@ -1,4 +1,7 @@
 /target
 .idea
 .DS_Store
-output.o
+output.s
+output.ll
+a.out
+optimized.ll
